@@ -6,7 +6,6 @@
 #include <stdexcept>
 
 #include "util.h"
-
 using namespace std;
 
 // ---------------------------------------------------------------------------
