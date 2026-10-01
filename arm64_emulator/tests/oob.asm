@@ -1,0 +1,4 @@
+MOV X0, 1
+STR X0, [SP, 0xF8]
+STR X0, [SP, 0xFC]
+RET
