@@ -199,7 +199,11 @@ void Emulator::execute(const Instruction &ins) {
 bool Emulator::run(const EmulatorOptions &opt) {
     error_.clear();
     halted_ = false;
-    regs_.pc = 0x0;  // instructions start at address 0x0, 4 bytes each
+    if (prog_.instructions.empty()) {
+        fprintf(stderr, "Note: the program has no instructions\n");
+        return true;
+    }
+    regs_.pc = prog_.instructions.front().address;  // normally 0x0; each instruction is 4 bytes
 
     const Instruction *current = nullptr;
     uint64_t steps = 0;
@@ -208,15 +212,17 @@ bool Emulator::run(const EmulatorOptions &opt) {
             uint64_t pc = regs_.pc;
             if (pc % 4 != 0) throw runtime_error("unaligned PC " + hexStr(pc));
 
-            uint64_t index = pc / 4;
-            if (index == prog_.instructions.size()) {
-                fprintf(stderr, "Note: reached the end of the program at %s without RET\n", hexStr(pc).c_str());
-                break;
+            auto it = prog_.addrIndex.find(pc);
+            if (it == prog_.addrIndex.end()) {
+                if (pc == prog_.endAddress()) {
+                    fprintf(stderr, "Note: reached the end of the program at %s without RET\n", hexStr(pc).c_str());
+                    break;
+                }
+                throw runtime_error("PC " + hexStr(pc) + " does not point at an instruction");
             }
-            if (index > prog_.instructions.size()) throw runtime_error("PC " + hexStr(pc) + " is outside the program");
             if (++steps > opt.maxSteps) throw runtime_error("exceeded " + to_string(opt.maxSteps) + " steps (infinite loop?)");
 
-            const Instruction &ins = prog_.instructions[index];
+            const Instruction &ins = prog_.instructions[it->second];
             current = &ins;
             if (!opt.quiet) printInstruction(ins);
 

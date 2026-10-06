@@ -18,7 +18,9 @@ static void usage(const char *prog) {
            "  -q, --quiet        Don't print each instruction as it executes\n"
            "  -t, --trace        Print the registers after every instruction\n"
            "      --base ADDR    Stack base address (default 0x0)\n"
-           "      --sp-top       Start SP at the top of the stack (base + 256) instead of the base\n"
+           "      --sp-base      Start SP at the stack base instead of the top (base + 256).\n"
+           "                     The default (top) is what compiled code expects, since it does\n"
+           "                     \"sub sp, sp, #N\" first and the stack grows downward\n"
            "      --max-steps N  Stop after N instructions (default 1000000)\n"
            "  -h, --help         Show this help\n",
            prog);
@@ -27,7 +29,7 @@ static void usage(const char *prog) {
 int main(int argc, char **argv) {
     EmulatorOptions opts;
     bool parseOnly = false;
-    bool spTop = false;
+    bool spTop = true;
     uint64_t base = 0x0;
     string path;
 
@@ -42,8 +44,10 @@ int main(int argc, char **argv) {
             opts.quiet = true;
         } else if (a == "-t" || a == "--trace") {
             opts.trace = true;
+        } else if (a == "--sp-base") {
+            spTop = false;
         } else if (a == "--sp-top") {
-            spTop = true;
+            spTop = true;  // kept for compatibility: this is now the default
         } else if (a == "--base" || a == "--max-steps") {
             uint64_t v = 0;
             if (i + 1 >= argc || !parseImmediate(argv[i + 1], v)) {

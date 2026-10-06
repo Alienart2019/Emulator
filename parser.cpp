@@ -3,9 +3,11 @@
 #include <cstdio>
 #include <fstream>
 #include <functional>
+#include <regex>
 #include <stdexcept>
 
 #include "util.h"
+
 using namespace std;
 
 // ---------------------------------------------------------------------------
@@ -116,6 +118,13 @@ Instruction parseLine(int lineNumber, const string &line) {
     return it->second(lineNumber, mnemonic, splitOperands(rest));
 }
 
+static bool isHexDigits(const string &s) {
+    if (s.empty()) return false;
+    for (unsigned char c : s)
+        if (!isxdigit(c)) return false;
+    return true;
+}
+
 bool loadProgram(const string &path, Program &prog, vector<string> &errors) {
     ifstream in(path);
     if (!in) {
@@ -123,41 +132,83 @@ bool loadProgram(const string &path, Program &prog, vector<string> &errors) {
         return false;
     }
 
+    // objdump:  "   14:<tab>f94007e0 <tab>ldr<tab>x0, [sp, #8]"
+    static const regex objdumpInstr(R"(^([0-9a-fA-F]+):\s+([0-9a-fA-F]{8})\s+(.+)$)");
+    // objdump:  "0000000000000000 <main>:"
+    static const regex objdumpLabel(R"(^([0-9a-fA-F]+)\s+<([^>]+)>:$)");
+
     string raw;
     int lineNumber = 0;
+    uint64_t nextAddr = 0;  // address given to the next plain-assembly instruction
     while (getline(in, raw)) {
         lineNumber++;
-        string line = cleanLine(raw);
 
-        // Peel off any leading "label:" definitions (a label may share a line with an instruction).
-        while (true) {
+        // objdump banner lines: "main.o:     file format elf64-littleaarch64", "Disassembly of section .text:"
+        if (raw.find("file format") != string::npos || raw.rfind("Disassembly of section", 0) == 0) continue;
+
+        string line = cleanLine(raw);
+        uint64_t address = nextAddr;
+        bool fromObjdump = false;
+        smatch m;
+
+        if (regex_match(line, m, objdumpLabel)) {
+            prog.labels[m[2].str()] = stoull(m[1].str(), nullptr, 16);
+            continue;
+        }
+        if (regex_match(line, m, objdumpInstr)) {
+            address = stoull(m[1].str(), nullptr, 16);
+            line = trim(m[3].str());
+            fromObjdump = true;
+        }
+
+        // Peel off any leading "label:" definitions (plain assembly only; a label may share a line with an instruction).
+        while (!fromObjdump) {
             size_t colon = line.find(':');
             if (colon == string::npos) break;
             string label = trim(line.substr(0, colon));
             if (label.empty() || label.find_first_of(" \t[],") != string::npos) break;
             if (prog.labels.count(label))
                 errors.push_back("line " + to_string(lineNumber) + ": duplicate label '" + label + "'");
-            prog.labels[label] = prog.instructions.size() * 4;
+            prog.labels[label] = nextAddr;
             line = trim(line.substr(colon + 1));
         }
         if (line.empty()) continue;
 
         try {
+            if (address % 4 != 0) throw invalid_argument("instruction address " + hexStr(address, 1) + " is not a multiple of 4");
+            if (prog.addrIndex.count(address)) throw invalid_argument("two instructions at address " + hexStr(address, 1));
+
             Instruction ins = parseLine(lineNumber, line);
-            ins.address = prog.instructions.size() * 4;  // Task 4: 4 bytes per instruction
+            ins.address = address;  // Task 4: every instruction is 4 bytes
+            prog.addrIndex[address] = prog.instructions.size();
             prog.instructions.push_back(ins);
+            nextAddr = address + 4;
         } catch (const exception &e) {
             errors.push_back("line " + to_string(lineNumber) + ": " + e.what());
         }
     }
 
-    // Every branch target must be a known label or a numeric address.
-    for (const Instruction &ins : prog.instructions) {
+    // Resolve branch targets. A target is a label, or a hex address as objdump prints it
+    // ("34 <main+0x34>", "0x34"). Numeric targets are rewritten to "0x34" so they print clearly.
+    for (Instruction &ins : prog.instructions) {
         if (!isBranchMnemonic(ins.mnemonic)) continue;
-        const string &target = ins.operands.back();
-        uint64_t unused;
-        if (!prog.labels.count(target) && !parseImmediate(target, unused))
-            errors.push_back("line " + to_string(ins.lineNumber) + ": unknown label '" + target + "'");
+        string &target = ins.operands.back();
+
+        size_t lt = target.find('<');  // drop the "<main+0x34>" symbol hint
+        if (lt != string::npos) target = trim(target.substr(0, lt));
+        if (prog.labels.count(target)) continue;
+
+        bool hasPrefix = target.size() > 2 && target[0] == '0' && (target[1] == 'x' || target[1] == 'X');
+        string digits = hasPrefix ? target.substr(2) : target;
+        string where = "line " + to_string(ins.lineNumber) + ": ";
+        if (!isHexDigits(digits) || digits.size() > 16) {
+            errors.push_back(where + "unknown label '" + target + "'");
+            continue;
+        }
+        uint64_t addr = stoull(digits, nullptr, 16);
+        if (!prog.addrIndex.count(addr) && addr != prog.endAddress())
+            errors.push_back(where + "branch target " + hexStr(addr, 1) + " is not the address of an instruction");
+        target = hexStr(addr, 1);
     }
 
     return errors.empty();

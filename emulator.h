@@ -18,8 +18,9 @@ struct EmulatorOptions {
 
 class Emulator {
 public:
-    // `spAtTop` starts SP at the top of the stack (base + 256) instead of at the base.
-    Emulator(Program program, std::uint64_t stackBase = 0x0, bool spAtTop = false);
+    // Compiled code allocates its frame with "sub sp, sp, #N", so SP must start at the TOP of the
+    // stack (base + 256) and grow downward. `spAtTop = false` starts SP at the base instead.
+    Emulator(Program program, std::uint64_t stackBase = 0x0, bool spAtTop = true);
 
     Emulator(const Emulator &) = delete;
     Emulator &operator=(const Emulator &) = delete;
